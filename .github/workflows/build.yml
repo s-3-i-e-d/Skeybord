@@ -9,16 +9,12 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Prepare Project Structure
+      - name: Build Keyboard IPA Directly
         run: |
-          mkdir -p App Keyboard
-          mv KeyboardViewController.swift Keyboard/
+          set -e
+          mkdir -p Payload/MyKeyboardApp.app/PlugIns/ArabicKeyboard.appex
 
-          cat << 'EOF' > App/App.swift
-          import SwiftUI
+          echo 'import SwiftUI
           @main
           struct MyKeyboardMainApp: App {
               var body: some Scene {
@@ -29,17 +25,280 @@ jobs:
                               .foregroundColor(.blue)
                           Text("لوحة المفاتيح جاهزة!")
                               .font(.title.bold())
-                          Text("لتفعيلها: ادخل إلى إعدادات الآيفون > عام > لوحة المفاتيح > لوحات المفاتيح > أضف لوحة مفاتيح جديدة > اختر لوحة المفاتيح وفعل السماح بالوصول الكامل.")
+                          Text("لتفعيلها: ادخل إلى إعدادات الآيفون > عام > لوحة المفاتيح > لوحات المفاتيح > أضف لوحة مفاتيح جديدة > اختر لوحة سويفت العربية وفعل السماح بالوصول الكامل.")
                               .multilineTextAlignment(.center)
                               .padding()
                       }
                   }
               }
-          }
-          EOF
+          }' > App.swift
 
-          cat << 'EOF' > App/Info.plist
-          <?xml version="1.0" encoding="UTF-8"?>
+          echo 'import UIKit
+          import SwiftUI
+
+          class WordLearningEngine: ObservableObject {
+              private let storageKey = "SwiftKeyClone_LearnedWords"
+              @Published var suggestions: [String] = []
+              private var wordFrequencies: [String: Int] = [:]
+
+              init() {
+                  loadWords()
+                  updateSuggestions(for: "")
+              }
+
+              private func loadWords() {
+                  if let saved = UserDefaults.standard.dictionary(forKey: storageKey) as? [String: Int] {
+                      wordFrequencies = saved
+                  } else {
+                      wordFrequencies = [
+                          "السلام": 5, "عليكم": 5, "إن": 4, "شاء": 4,
+                          "الله": 6, "يعطيك": 3, "العافية": 3, "هلا": 4
+                      ]
+                      saveWords()
+                  }
+              }
+
+              private func saveWords() {
+                  UserDefaults.standard.set(wordFrequencies, forKey: storageKey)
+              }
+
+              func learnWord(_ rawWord: String) {
+                  let word = rawWord.trimmingCharacters(in: .whitespacesAndNewlines)
+                  guard word.count > 1 else { return }
+                  wordFrequencies[word, default: 0] += 1
+                  saveWords()
+              }
+
+              func updateSuggestions(for prefix: String) {
+                  let cleanPrefix = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
+                  if cleanPrefix.isEmpty {
+                      suggestions = wordFrequencies
+                          .sorted { $0.value > $1.value }
+                          .prefix(3)
+                          .map { $0.key }
+                  } else {
+                      let matches = wordFrequencies
+                          .filter { $0.key.hasPrefix(cleanPrefix) }
+                          .sorted { $0.value > $1.value }
+                          .prefix(3)
+                          .map { $0.key }
+                      suggestions = matches.isEmpty ? [cleanPrefix] : matches
+                  }
+              }
+          }
+
+          struct ArabicSwiftKeyView: View {
+              @ObservedObject var engine: WordLearningEngine
+              var onInsertText: (String) -> Void
+              var onDeleteBackward: () -> Void
+              var onSelectSuggestion: (String) -> Void
+              var onNextKeyboard: () -> Void
+
+              let numberRow = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+              let row1 = ["ض", "ص", "ث", "ق", "ف", "غ", "ع", "ه", "خ", "ح", "ج"]
+              let row2 = ["ش", "س", "ي", "ب", "ل", "ا", "ت", "ن", "م", "ك", "ط"]
+              let row3 = ["ذ", "ء", "ؤ", "ر", "ى", "ة", "و", "ز", "ظ", "د"]
+
+              @State private var isSymbolsMode = false
+              let symbolsRow1 = ["!", "@", "#", "$", "%", "^", "&", "*", "(", ")"]
+              let symbolsRow2 = ["-", "_", "+", "=", "/", "؟", "،", "؛", ":", "."]
+
+              var body: some View {
+                  VStack(spacing: 6) {
+                      HStack(spacing: 8) {
+                          ForEach(engine.suggestions, id: \.self) { word in
+                              Button(action: { onSelectSuggestion(word) }) {
+                                  Text(word)
+                                      .font(.system(size: 15, weight: .medium))
+                                      .foregroundColor(.primary)
+                                      .frame(maxWidth: .infinity)
+                                      .padding(.vertical, 8)
+                                      .background(Color(UIColor.secondarySystemBackground))
+                                      .cornerRadius(6)
+                              }
+                          }
+                      }
+                      .padding(.horizontal, 6)
+                      .padding(.top, 4)
+
+                      HStack(spacing: 4) {
+                          ForEach(numberRow, id: \.self) { num in
+                              KeyButton(label: num) { onInsertText(num) }
+                          }
+                      }
+                      .padding(.horizontal, 4)
+
+                      if !isSymbolsMode {
+                          KeyRowView(keys: row1, onTap: onInsertText)
+                          KeyRowView(keys: row2, onTap: onInsertText)
+                          HStack(spacing: 4) {
+                              ForEach(row3, id: \.self) { char in
+                                  KeyButton(label: char) { onInsertText(char) }
+                              }
+                              Button(action: onDeleteBackward) {
+                                  Image(systemName: "delete.left.fill")
+                                      .font(.system(size: 16, weight: .semibold))
+                                      .foregroundColor(.primary)
+                                      .frame(width: 42, height: 40)
+                                      .background(Color(UIColor.systemGray3))
+                                      .cornerRadius(6)
+                              }
+                          }
+                          .padding(.horizontal, 4)
+                      } else {
+                          KeyRowView(keys: symbolsRow1, onTap: onInsertText)
+                          KeyRowView(keys: symbolsRow2, onTap: onInsertText)
+                          HStack(spacing: 4) {
+                              KeyButton(label: "أ") { onInsertText("أ") }
+                              KeyButton(label: "إ") { onInsertText("إ") }
+                              KeyButton(label: "آ") { onInsertText("آ") }
+                              KeyButton(label: "ئ") { onInsertText("ئ") }
+                              Button(action: onDeleteBackward) {
+                                  Image(systemName: "delete.left.fill")
+                                      .font(.system(size: 16, weight: .semibold))
+                                      .foregroundColor(.primary)
+                                      .frame(width: 55, height: 40)
+                                      .background(Color(UIColor.systemGray3))
+                                      .cornerRadius(6)
+                              }
+                          }
+                          .padding(.horizontal, 4)
+                      }
+
+                      HStack(spacing: 6) {
+                          Button(action: { isSymbolsMode.toggle() }) {
+                              Text(isSymbolsMode ? "عربي" : "رموز")
+                                  .font(.system(size: 14, weight: .semibold))
+                                  .foregroundColor(.primary)
+                                  .frame(width: 64, height: 42)
+                                  .background(Color(UIColor.systemGray3))
+                                  .cornerRadius(6)
+                          }
+                          Button(action: onNextKeyboard) {
+                              Image(systemName: "globe")
+                                  .font(.system(size: 18))
+                                  .foregroundColor(.primary)
+                                  .frame(width: 44, height: 42)
+                                  .background(Color(UIColor.systemGray3))
+                                  .cornerRadius(6)
+                          }
+                          Button(action: { onInsertText(" ") }) {
+                              Text("مسافة")
+                                  .font(.system(size: 15, weight: .medium))
+                                  .foregroundColor(.primary)
+                                  .frame(maxWidth: .infinity)
+                                  .frame(height: 42)
+                                  .background(Color(UIColor.systemBackground))
+                                  .cornerRadius(6)
+                          }
+                          Button(action: { onInsertText("\n") }) {
+                              Text("إدخال")
+                                  .font(.system(size: 14, weight: .semibold))
+                                  .foregroundColor(.white)
+                                  .frame(width: 68, height: 42)
+                                  .background(Color.blue)
+                                  .cornerRadius(6)
+                          }
+                      }
+                      .padding(.horizontal, 4)
+                      .padding(.bottom, 4)
+                  }
+                  .background(Color(UIColor.secondarySystemGroupedBackground))
+              }
+          }
+
+          struct KeyRowView: View {
+              let keys: [String]
+              let onTap: (String) -> Void
+              var body: some View {
+                  HStack(spacing: 4) {
+                      ForEach(keys, id: \.self) { key in
+                          KeyButton(label: key) { onTap(key) }
+                      }
+                  }
+                  .padding(.horizontal, 4)
+              }
+          }
+
+          struct KeyButton: View {
+              let label: String
+              let action: () -> Void
+              var body: some View {
+                  Button(action: action) {
+                      Text(label)
+                          .font(.system(size: 18))
+                          .foregroundColor(.primary)
+                          .frame(maxWidth: .infinity)
+                          .frame(height: 40)
+                          .background(Color(UIColor.systemBackground))
+                          .cornerRadius(6)
+                  }
+              }
+          }
+
+          @objc(KeyboardViewController)
+          class KeyboardViewController: UIInputViewController {
+              private let engine = WordLearningEngine()
+              private var hostingController: UIHostingController<ArabicSwiftKeyView>?
+
+              override func viewDidLoad() {
+                  super.viewDidLoad()
+                  setupKeyboardUI()
+              }
+
+              private func setupKeyboardUI() {
+                  let keyboardView = ArabicSwiftKeyView(
+                      engine: engine,
+                      onInsertText: { [weak self] text in self?.handleInsertText(text) },
+                      onDeleteBackward: { [weak self] in self?.handleDelete() },
+                      onSelectSuggestion: { [weak self] word in self?.handleSelectSuggestion(word) },
+                      onNextKeyboard: { [weak self] in self?.advanceToNextInputMode() }
+                  )
+                  let host = UIHostingController(rootView: keyboardView)
+                  host.view.translatesAutoresizingMaskIntoConstraints = false
+                  host.view.backgroundColor = .clear
+                  addChild(host)
+                  view.addSubview(host.view)
+                  host.didMove(toParent: self)
+                  NSLayoutConstraint.activate([
+                      host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                      host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                      host.view.topAnchor.constraint(equalTo: view.topAnchor),
+                      host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                      host.view.heightAnchor.constraint(equalToConstant: 290)
+                  ])
+                  self.hostingController = host
+              }
+
+              private func currentTypedWord() -> String {
+                  guard let context = textDocumentProxy.documentContextBeforeInput else { return "" }
+                  if let lastChar = context.last, lastChar.isWhitespace || lastChar.isNewline { return "" }
+                  return context.components(separatedBy: .whitespacesAndNewlines).last ?? ""
+              }
+
+              private func handleInsertText(_ text: String) {
+                  if text == " " || text == "\n" {
+                      engine.learnWord(currentTypedWord())
+                  }
+                  textDocumentProxy.insertText(text)
+                  engine.updateSuggestions(for: currentTypedWord())
+              }
+
+              private func handleDelete() {
+                  textDocumentProxy.deleteBackward()
+                  engine.updateSuggestions(for: currentTypedWord())
+              }
+
+              private func handleSelectSuggestion(_ suggestion: String) {
+                  let current = currentTypedWord()
+                  for _ in 0..<current.count { textDocumentProxy.deleteBackward() }
+                  textDocumentProxy.insertText(suggestion + " ")
+                  engine.learnWord(suggestion)
+                  engine.updateSuggestions(for: "")
+              }
+          }' > KeyboardViewController.swift
+
+          echo '<?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
@@ -48,29 +307,38 @@ jobs:
               <key>CFBundleDisplayName</key>
               <string>لوحتي الذكية</string>
               <key>CFBundleExecutable</key>
-              <string>$(EXECUTABLE_NAME)</string>
+              <string>MyKeyboardApp</string>
               <key>CFBundleIdentifier</key>
-              <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+              <string>com.s3ied.skeyboard</string>
               <key>CFBundleInfoDictionaryVersion</key>
               <string>6.0</string>
               <key>CFBundleName</key>
-              <string>$(PRODUCT_NAME)</string>
+              <string>MyKeyboardApp</string>
               <key>CFBundlePackageType</key>
               <string>APPL</string>
               <key>CFBundleShortVersionString</key>
               <string>1.0</string>
+              <key>CFBundleSupportedPlatforms</key>
+              <array>
+                  <string>iPhoneOS</string>
+              </array>
               <key>CFBundleVersion</key>
               <string>1</string>
               <key>LSRequiresIPhoneOS</key>
               <true/>
+              <key>MinimumOSVersion</key>
+              <string>15.0</string>
+              <key>UIDeviceFamily</key>
+              <array>
+                  <integer>1</integer>
+                  <integer>2</integer>
+              </array>
               <key>UILaunchScreen</key>
               <dict/>
           </dict>
-          </plist>
-          EOF
+          </plist>' > Payload/MyKeyboardApp.app/Info.plist
 
-          cat << 'EOF' > Keyboard/Info.plist
-          <?xml version="1.0" encoding="UTF-8"?>
+          echo '<?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
@@ -79,19 +347,30 @@ jobs:
               <key>CFBundleDisplayName</key>
               <string>لوحة سويفت العربية</string>
               <key>CFBundleExecutable</key>
-              <string>$(EXECUTABLE_NAME)</string>
+              <string>ArabicKeyboard</string>
               <key>CFBundleIdentifier</key>
-              <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+              <string>com.s3ied.skeyboard.keyboard</string>
               <key>CFBundleInfoDictionaryVersion</key>
               <string>6.0</string>
               <key>CFBundleName</key>
-              <string>$(PRODUCT_NAME)</string>
+              <string>ArabicKeyboard</string>
               <key>CFBundlePackageType</key>
               <string>XPC!</string>
               <key>CFBundleShortVersionString</key>
               <string>1.0</string>
+              <key>CFBundleSupportedPlatforms</key>
+              <array>
+                  <string>iPhoneOS</string>
+              </array>
               <key>CFBundleVersion</key>
               <string>1</string>
+              <key>MinimumOSVersion</key>
+              <string>15.0</string>
+              <key>UIDeviceFamily</key>
+              <array>
+                  <integer>1</integer>
+                  <integer>2</integer>
+              </array>
               <key>NSExtension</key>
               <dict>
                   <key>NSExtensionAttributes</key>
@@ -108,61 +387,39 @@ jobs:
                   <key>NSExtensionPointIdentifier</key>
                   <string>com.apple.keyboard-service</string>
                   <key>NSExtensionPrincipalClass</key>
-                  <string>$(PRODUCT_MODULE_NAME).KeyboardViewController</string>
+                  <string>KeyboardViewController</string>
               </dict>
           </dict>
-          </plist>
-          EOF
+          </plist>' > Payload/MyKeyboardApp.app/PlugIns/ArabicKeyboard.appex/Info.plist
 
-          cat << 'EOF' > project.yml
-          name: MyKeyboardApp
-          options:
-            bundleIdPrefix: com.custom
-            deploymentTarget:
-              iOS: "15.0"
-          targets:
-            MyKeyboardApp:
-              type: application
-              platform: iOS
-              sources: [App]
-              info:
-                path: App/Info.plist
-              settings:
-                PRODUCT_BUNDLE_IDENTIFIER: com.custom.mykeyboard
-                CODE_SIGN_IDENTITY: ""
-                CODE_SIGNING_REQUIRED: NO
-                CODE_SIGNING_ALLOWED: NO
-              dependencies:
-                - target: ArabicKeyboard
-            ArabicKeyboard:
-              type: app-extension
-              platform: iOS
-              sources: [Keyboard]
-              info:
-                path: Keyboard/Info.plist
-              settings:
-                PRODUCT_BUNDLE_IDENTIFIER: com.custom.mykeyboard.extension
-                CODE_SIGN_IDENTITY: ""
-                CODE_SIGNING_REQUIRED: NO
-                CODE_SIGNING_ALLOWED: NO
-          EOF
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
 
-      - name: Generate and Build IPA
-        run: |
-          xcodegen generate
-          xcodebuild build \
-            -project MyKeyboardApp.xcodeproj \
-            -scheme MyKeyboardApp \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES
+          xcrun --sdk iphoneos swiftc App.swift \
+            -sdk "$SDK_PATH" \
+            -target arm64-apple-ios15.0 \
+            -parse-as-library \
+            -O \
+            -o Payload/MyKeyboardApp.app/MyKeyboardApp
 
-          mkdir -p Payload
-          cp -r build/Build/Products/Release-iphoneos/MyKeyboardApp.app Payload/
+          xcrun --sdk iphoneos swiftc KeyboardViewController.swift \
+            -sdk "$SDK_PATH" \
+            -target arm64-apple-ios15.0 \
+            -parse-as-library \
+            -application-extension \
+            -module-name ArabicKeyboard \
+            -framework Foundation \
+            -framework UIKit \
+            -Xlinker -e -Xlinker _NSExtensionMain \
+            -O \
+            -o Payload/MyKeyboardApp.app/PlugIns/ArabicKeyboard.appex/ArabicKeyboard
+
+          echo -n "APPL????" > Payload/MyKeyboardApp.app/PkgInfo
+          plutil -convert binary1 Payload/MyKeyboardApp.app/Info.plist
+          plutil -convert binary1 Payload/MyKeyboardApp.app/PlugIns/ArabicKeyboard.appex/Info.plist
+
+          codesign --force --sign - --timestamp=none Payload/MyKeyboardApp.app/PlugIns/ArabicKeyboard.appex
+          codesign --force --sign - --timestamp=none Payload/MyKeyboardApp.app
+
           zip -r KeyboardApp.ipa Payload
 
       - name: Upload IPA
@@ -170,3 +427,4 @@ jobs:
         with:
           name: KeyboardApp-IPA
           path: KeyboardApp.ipa
+
