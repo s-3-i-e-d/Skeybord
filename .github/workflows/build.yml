@@ -1,0 +1,172 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Prepare Project Structure
+        run: |
+          mkdir -p App Keyboard
+          mv KeyboardViewController.swift Keyboard/
+
+          cat << 'EOF' > App/App.swift
+          import SwiftUI
+          @main
+          struct MyKeyboardMainApp: App {
+              var body: some Scene {
+                  WindowGroup {
+                      VStack(spacing: 16) {
+                          Image(systemName: "keyboard.fill")
+                              .font(.system(size: 60))
+                              .foregroundColor(.blue)
+                          Text("لوحة المفاتيح جاهزة!")
+                              .font(.title.bold())
+                          Text("لتفعيلها: ادخل إلى إعدادات الآيفون > عام > لوحة المفاتيح > لوحات المفاتيح > أضف لوحة مفاتيح جديدة > اختر لوحة المفاتيح وفعل السماح بالوصول الكامل.")
+                              .multilineTextAlignment(.center)
+                              .padding()
+                      }
+                  }
+              }
+          }
+          EOF
+
+          cat << 'EOF' > App/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>ar</string>
+              <key>CFBundleDisplayName</key>
+              <string>لوحتي الذكية</string>
+              <key>CFBundleExecutable</key>
+              <string>$(EXECUTABLE_NAME)</string>
+              <key>CFBundleIdentifier</key>
+              <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>$(PRODUCT_NAME)</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>LSRequiresIPhoneOS</key>
+              <true/>
+              <key>UILaunchScreen</key>
+              <dict/>
+          </dict>
+          </plist>
+          EOF
+
+          cat << 'EOF' > Keyboard/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>ar</string>
+              <key>CFBundleDisplayName</key>
+              <string>لوحة سويفت العربية</string>
+              <key>CFBundleExecutable</key>
+              <string>$(EXECUTABLE_NAME)</string>
+              <key>CFBundleIdentifier</key>
+              <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>$(PRODUCT_NAME)</string>
+              <key>CFBundlePackageType</key>
+              <string>XPC!</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>NSExtension</key>
+              <dict>
+                  <key>NSExtensionAttributes</key>
+                  <dict>
+                      <key>IsASCIICapable</key>
+                      <false/>
+                      <key>PrefersRightToLeft</key>
+                      <true/>
+                      <key>PrimaryLanguage</key>
+                      <string>ar</string>
+                      <key>RequestsOpenAccess</key>
+                      <true/>
+                  </dict>
+                  <key>NSExtensionPointIdentifier</key>
+                  <string>com.apple.keyboard-service</string>
+                  <key>NSExtensionPrincipalClass</key>
+                  <string>$(PRODUCT_MODULE_NAME).KeyboardViewController</string>
+              </dict>
+          </dict>
+          </plist>
+          EOF
+
+          cat << 'EOF' > project.yml
+          name: MyKeyboardApp
+          options:
+            bundleIdPrefix: com.custom
+            deploymentTarget:
+              iOS: "15.0"
+          targets:
+            MyKeyboardApp:
+              type: application
+              platform: iOS
+              sources: [App]
+              info:
+                path: App/Info.plist
+              settings:
+                PRODUCT_BUNDLE_IDENTIFIER: com.custom.mykeyboard
+                CODE_SIGN_IDENTITY: ""
+                CODE_SIGNING_REQUIRED: NO
+                CODE_SIGNING_ALLOWED: NO
+              dependencies:
+                - target: ArabicKeyboard
+            ArabicKeyboard:
+              type: app-extension
+              platform: iOS
+              sources: [Keyboard]
+              info:
+                path: Keyboard/Info.plist
+              settings:
+                PRODUCT_BUNDLE_IDENTIFIER: com.custom.mykeyboard.extension
+                CODE_SIGN_IDENTITY: ""
+                CODE_SIGNING_REQUIRED: NO
+                CODE_SIGNING_ALLOWED: NO
+          EOF
+
+      - name: Generate and Build IPA
+        run: |
+          xcodegen generate
+          xcodebuild build \
+            -project MyKeyboardApp.xcodeproj \
+            -scheme MyKeyboardApp \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
+
+          mkdir -p Payload
+          cp -r build/Build/Products/Release-iphoneos/MyKeyboardApp.app Payload/
+          zip -r KeyboardApp.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyboardApp-IPA
+          path: KeyboardApp.ipa
